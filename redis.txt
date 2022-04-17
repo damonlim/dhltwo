@@ -1,0 +1,12 @@
+Installation
+Download the zip file, unzip then issue make to build the server.
+
+Start server
+```
+src/redis-server
+```
+
+Shutdown server
+```
+src/redis-cli shutdown
+```
