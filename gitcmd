@@ -1,0 +1,20 @@
+useful git cmd
+
+cd to main (or master) directory
+git checkout -b feature/name-of-feature
+
+REPEAT as needed
+git add -A
+git commit -m “short description of what was done”
+git push origin feature/name-of-feature     (this will push your local feature to remote repository)
+
+WHEN feature is completed  (OPTION 1)
+git checkout main (or master)
+git pull
+git merge feature/name-of-feature
+git push origin main
+
+WHEN feature is completed  (OPTION 2)
+create a pull request from BitBucket
+reviewers approve the request
+admin merges the feature branch through BitBucket
