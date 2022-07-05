@@ -1,0 +1,550 @@
+
+Setup EC2 for 
+-Jenkins server
+-Tomcat server
+-Docker server
+
+Chapter 4: Integrating Docker in CI/CD Pipeline
+4.x Integrate Docker with Jenkins
+
+(!-- Docker server --)
+Check system users: #cat /etc/passwd
+Check system groups: #cat /etc/group
+Add dockeradmin user:
+#useradd dockeradmin
+Set password:
+#passwd dockeradmin
+Modify the dockeradmin
+#usermod -aG docker dockeradmin
+Allow SSHD for username/password login in the server
+#vi /etc/ssh/sshd_config
+ (locate and change the PasswordAuthentication from 'no' to 'yes')
+Restart sshd services: #service sshd reload
+
+Generate dockeradmin rsa key pair (optional)
+#sudo su - dockeradmin
+#ssh-keygen
+
+(!-- Jenkins server --)
+Login to Jenkins  >  look for "publish over ssh" plugin
+
+Create a new item (Maven), where the Post-build actions "Transfer" section is as below:
+Transfer Set
+Source files: webapp/target/webapp.war
+Remove prefix: webapp/target
+Remote directory: //opt//docker  (Note: the double //, if single, it will go to /home/<dockeradmin>/opt/docker
+
+(!-- Docker server --)
+cd /opt
+mkdir docker
+chown -R dockeradmin:dockeradmin docker
+cd /opt/docker
+create Dockerfile in this directory with content:
+	FROM tomcat:latest
+	RUN cp -R /usr/local/tomcat/webapps.dist/* /usr/local/tomcat/webapps
+	COPY ./webapp.war /usr/local/tomcat/webapps
+
+#docker build -t tomcat:v1 .
+#docker run -d --name tomcatv1 -p 8086:8080 tomcat:v1
+
+(!-- Testing: Chrome browser --)
+Launch: http://<docker-ip>:8086/webapp
+
+
+4.x Automate BUild and Deployment on Docker Container
+(!-- Jenkins server --)
+Add the below to POST BUILD > Exec Command
+	cd /opt/docker;
+	docker build -t regapp:v1 .;
+	docker stop registerapp;
+	docker rm registerapp;
+	docker run -d --name registerapp -p 8087:8080 regapp:v1
+
+(!-- Docker server --)
+Remove unnecessary running container, then prune it
+#docker container prune
+#docker image prune -a
+
+
+Chapter 5: Integrating Ansible in CI/CD Pipeline
+
+(!-- Ansible server *new --)
+Rename EC2 server hostname: vi /etc/hostname  -> change to ansible-server;   "init 6" to restart
+Create ansadmin user: useradd ansadmin  ;  then:  passwd ansadmin
+Add user to sudoers file:
+# visudo
+-> add: ansadmin	ALL=(ALL)	NOPASSWD: ALL
+->      to below Allow root to run any commands anywhere
+# vi /etc/ssh/sshd_config
+-> change the PasswordAuthentication value of 'no' to 'yes'
+# service sshd reload
+Generate ssh keys:
+# ssh-keygen
+Install Ansible (yum install ansible):
+# amazon-linux-extras install ansible2
+
+(!-- Docker server --)
+Create ansadmin: useradd ansadmin; passwd ansadmin
+Add ansadmin to sudoers: visudo
+-> add: ansadmin  ALL=(ALL)  NOPASSWD: ALL
+Enable password based login
+# vi /etc/ssh/sshd_config
+-> change the PasswordAuthentication value of 'no' to 'yes'
+
+(!-- Ansible server --)
+Add to hosts file:
+#vi /etc/ansible/hosts
+-> add internal IP address of Docker server, eg: 10.0.0.82
+Copy ssh keys:
+#sudo su - ansadmin
+#cd .ssh
+#ssh-copy-id 10.0.0.82      (this will copy the id_rsa.pub to the Docker server)
+
+(!-- Docker server --)
+Verify the ssh has been copied over:
+#sudo su - ansadmin
+#cd .ssh  -> then check the existence of 'authorized_keys'
+
+(!-- Ansible server --)
+Test connection:
+#ansible all -m ping
+#ansible all -m command -a uptime
+
+! Now your Ansible server is able to control your Docker server
+
+5.x Integrate Ansible with Jenkins
+(!-- Jenkins server --)
+Manage Jenkins > Configure systems > Publish to SSH
+> click Add
+Fill up the Name (ansible-server), Hostname (IP Address of Ansible server), Username (ansadmin)
+Click Advanced
+Check 'Use password authentication, or use a different key'
+Key in the password    -> then click Test Connection
+Save
+
+Create a new item called Copy_Artifacts_Onto_Ansible
+(you can based on Deploy...toContainer job)
+Then scroll down to Post-build Actions, instead of dockerhost in SSH Server name, 
+change it to 'ansible-server'
+remove whatever is in the Exec command 
+
+(!-- Ansible server --)
+Create /opt/docker folder
+#cd /opt
+#sudo mkdir docker
+#sudo chown ansadmin:ansadmin docker
+
+Install Docker: #yum install docker
+Verify docker group has been created: #cat /etc/group
+Add Docker group to ansadmin: #usermod -aG docker ansadmin
+Verify it: #id ansadmin
+Start docker
+# service docker start
+
+Create a Dockerfile in /opt/docker:
+	FROM tomcat:latest
+	RUN cp -R /usr/local/tomcat/webapps.dist/* /usr/local/tomcat/webapps
+	COPY ./webapp.war /usr/local/tomcat/webapps
+
+#chmod 777 /var/run/docker.sock (optional)
+#docker build -t regapp:v1 .
+Run Docker in terminal mode:
+#docker run -t --name regapp-server -p 8081:8080 regapp:v1
+
+5.x Ansible Playbook to Create Image and Container
+(!-- Ansible server --)
+As root
+vi /etc/ansible/hosts with content as below:
+[dockerhost]
+10.0.0.82
+
+[ansible]
+10.0.0.87
+
+
+Login as ansadmin: sudo su - ansadmin
+Copy SSH to itself
+#ssh-copy-id localhost
+
+If you issue: #ansible all -a uptime
+It will be able to access localhost ansible server as well as dockerhost server
+
+#vi regapp.yml      Content below:
+---
+- hosts: ansible
+  
+  tasks:
+  - name: create docker image
+    command: docker build -t regapp:latest .
+	args:
+	 chdir: /opt/docker
+
+Check the playbook syntax any error
+#ansible-playbook regapp.yml --check
+Execute:
+#ansible-playbook regapp.yml
+That will create regapp:latest image through ansible
+
+Login to Docker hub
+docker login
+
+Tag an image
+docker tag <image id> damonhalim/regapp:latest
+Push the image to DockerHub
+docker push damonhalim/regapp:latest
+
+5.x Jenkins Job to Build an Image onto Ansible
+(!-- Ansible server --)
+Login as ansadmin
+#vi regapp.yml      Content below:
+---
+- hosts: ansible
+  
+  tasks:
+  - name: create docker image
+    command: docker build -t regapp:latest .
+	args:
+	 chdir: /opt/docker
+  - name: create tag to push image onto dockerhub
+    command: docker tag regapp:latest damonhalim/regapp:latest
+  - name: push docker image
+    command: docker push damonhalim/regapp:latest
+	
+Check the playbook syntax any error
+#ansible-playbook regapp.yml --check
+Execute - limit the execution only at ansible server at localhost(10.0.0.87):
+#ansible-playbook regapp.yml --limit 10.0.0.87
+
+(!-- Ansible server --)
+Configure the Copy_Artifacts_onto_Ansible job
+Under Post-build Actions  > Exec command   add the below:
+ansible-playbook /opt/docker/regapp.yml
+
+(!-- Jenkins server --)
+add the below to Exec command in Copy_Artifacts_onto_Ansible job:
+ansible-playbook /opt/docker/regapp.yml
+
+5.x How to Create Container on DockerHost Using Ansible Playbook - DevOps Project
+(!-- Ansible server --)
+Login as ansadmin
+cd /opt/docker
+vi deploy_regapp.yml
+---
+- hosts: dockerhost
+
+  tasks:
+  - name: create container
+    command: docker run -d --name regapp-server -p 8082:8080 damonhalim/regapp:latest
+
+The below is to make sure ansadmin able to run docker socket at DockerHost server
+							AT DOCKERHOST SERVER: chmod 777 /var/run/docker.sock
+Run ansible
+ansible-playbook deploy_regapp.yml
+
+5.x Continuous Deployment of Docker Container Using Ansible Playbook
+(!-- Ansible server --)
+vi deploy_regapp.yml
+---
+- hosts: dockerhost
+
+  tasks:
+  - name: stop existing container
+    command: docker stop regapp-server
+	ignore_errors: yes
+	
+  - name: remove the container
+    command: docker rm regapp-server
+	ignore_errors: yes
+	
+  - name: remove image
+    command: docker rmi damonhalim/regapp:latest
+	ignore_errors: yes
+	
+  - name: create container
+    command: docker run -d --name regapp-server -p 8082:8080 damonhalim/regapp:latest
+	
+ansible-playbook /opt/docker/regapp.yml
+
+5.x Jenkins CI/CD to Deploy on Container Using Ansible
+(!-- Jenkins server --)
+add the below to Exec command in Copy_Artifacts_onto_Ansible job:
+ansible-playbook /opt/docker/regapp.yml;
+sleep 10;
+ansible-playbook /opt/docker/deploy_regapp.yml
+
+Chapter 6 Kubernetes on AWS
+
+(!-- Eks server *new --)
+Follow this step:
+https://github.com/damonlim/Simple-DevOps-Project/blob/master/Kubernetes/kubernetes_setup_using_eksctl.md
+
+Create IAM Role with Administrators and assigned it to Eks server before creation of cluster.
+
+Create cluster:
+eksctl create cluster --name damonhalim  \
+--region ap-southeast-1 \
+--node-type t2.small
+
+kubeconfig location: /root/.kube/config
+
+To view the 2 nodes created by EKS:
+#kubectl get nodes
+Get all resources:
+#kubectl get all
+
+Create a pod called webapp:
+kubectl run webapp --image=httpd
+To view all the pods:
+kubectl get pods
+
+Deploying Nginx Container:
+kubectl create deployment  demo-nginx --image=nginx --replicas=2 --port=80
+
+kubectl get deployment
+
+Expose the deployment as service:
+kubectl expose deployment demo-nginx --port=80 --type=LoadBalancer
+
+
+Delete deployment
+kubectl delete deployment demo-nginx
+kubectl delete service/demo-nginx  ( delete the load balancer)
+
+
+[root@ip-10-0-0-53 ~]# vi pods.yml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: demo-pod
+  labels:
+    app: demo-app
+spec:
+  containers:
+    - name: demo-nginx
+      image: nginx
+      ports:
+    - name: demo-nginx
+      containerPort: 80
+[root@ip-10-0-0-53 ~]# vi service.yml
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-service
+
+spec:
+  ports:
+  - name: nginx-port
+    port: 80
+    targetPort: 80
+
+  selector:
+    app: demo-app
+  type: LoadBalancer
+
+#kubectl apply -f pod.yml
+#kubectl apply -f service.yml
+
+Check and verify:
+#kubectl describe service/demo-service             (note: you can get the servicename from kubectl get all)
+Check pod ip:
+#kubectl get pod -o wide
+
+
+Chapter 7 Integrating Kubernetes in CI/CD Pipeline
+
+Delete the Chap6 pod:
+kubectl delete pod demo-pod
+Delete the previous demo service:
+kubectl delete service/demo-service
+
+Create regapp-deployment.yml with content from:
+https://github.com/damonlim/Simple-DevOps-Project/blob/master/Kubernetes/regapp-deploy.yml
+Run the deployment:
+kubectl apply -f regapp-deployment.yml
+
+Create regapp-service.yml with content from:
+https://github.com/damonlim/Simple-DevOps-Project/blob/master/Kubernetes/regapp-service.yml
+Run the service:
+kubectl apply -f regapp-service.yml
+
+Now you can access the Registration WebApplication by using DNS of LoadBalancer with port 8080 from your browser
+
+7.x Integrate Kubernetes Bootstrap Server with Ansible
+(!-- Eks server --)
+useradd ansadmin;   passwd ansadmin;  visudo;
+vi /etc/ssh/sshd_config
+service sshd reload
+
+set root password:
+passwd root   (you can set it as damonlim)
+
+(!-- Ansible server --)
+Login as ansadmin
+cd /opt/docker
+cp regapp.yml create_image_regapp.yml (copy the existing regapp to new file)
+cp deploy_regapp.yml docker_deployment.yml
+vi hosts:
+localhost
+
+[kubernetes]
+10.0.0.53
+
+[ansible]
+10.0.0.87
+
+
+Copy the ssh id:
+ssh-copy-id 10.0.0.53    (note: that's kube ip)
+
+Check / verify:
+ansible all -a uptime
+
+vi kube_deploy.yml:
+---
+- hosts: kubernetes
+  user: root
+
+  tasks:
+  - name: deploy regapp on kubernetes
+    command: kubectl apply -f regapp-deployment.yml
+
+
+vi kube_service.yml:
+---
+- hosts: kubernetes
+  user: root
+
+  tasks:
+  - name: deploy regapp on kubernetes
+    command: kubectl apply -f regapp-service.yml
+
+Copy ssh to root user at kube bootstrap server:
+ssh-copy-id root@10.0.0.53
+
+OPTIONAL: Delete the previous regapp-service:
+	kubectl delete -f regapp-service.yml
+	kubectl delete -f regapp-deployment.yml
+	verify: kubectl get all
+
+Manually run ansible playbook to deploy:
+#ansible-playbook -i /opt/docker/hosts kube_deploy.yml
+#ansible-playbook -i /opt/docker/hosts kube_service.yml
+
+7.x Create Jenkins Deployment Job for Kubernetes
+
+(!-- Ansible server --)
+We can combine the previous kube_deploy and kube_service yml file into 1 called kube_deploy.yml:
+---
+- hosts: kubernetes
+  user: root
+  tasks:
+  - name: deploy regapp on kubernetes
+    command: kubectl apply -f regapp-deployment.yml  
+  - name: deploy regapp on kubernetes
+    command: kubectl apply -f regapp-service.yml
+
+(!-- Jenkins server --)
+Create a new Freestyle job/item called Regapp_CD_job. 
+add the below to Exec command:
+ansible-playbook -i /opt/docker/hosts /opt/docker/kube_deploy.yml
+The above is just to test Jenkins deployment
+
+
+Create a new job/item called Regapp_CI_job   Copy from: Copy_Artifacts_onto_Ansible
+In the Exec command of the 'Send build artifacts over SSH' to 'ansible-server', fill this:
+ansible-playbook /opt/docker/create_image_regapp.yml
+
+
+NOTE: If the CI job above is successful, then build CD job
+Add post-build action: Build other projects
+Fill 'Regapp_CD_job' in the 'Projects to build' input field
+
+(!-- Ansible server --)
+We need to update the kube_deploy so that every new code change compile and updated by Jenkins and deployed thru Ansible should be reflected
+Update the kube_deploy.yml
+---
+- hosts: kubernetes
+  user: root
+
+  tasks:
+  - name: deploy regapp on kubernetes
+    command: kubectl apply -f regapp-deployment.yml
+
+  - name: create service for regapp
+    command: kubectl apply -f regapp-service.yml
+
+  - name: update deployment with new pods if image updated in docker hub
+    command: kubectl rollout restart deployment.apps/damon-regapp
+
+
+******SCREEN SHOT********
+[root@ip-10-0-0-53 ~]# kubectl get pod -o wide
+NAME                           READY   STATUS    RESTARTS   AGE   IP               NODE                                                NOMINATED NODE   READINESS GATES
+damon-regapp-b646fb86b-4rwtn   1/1     Running   0          14m   192.168.57.128   ip-192-168-46-119.ap-southeast-1.compute.internal   <none>           <none>
+damon-regapp-b646fb86b-f4ll7   1/1     Running   0          14m   192.168.7.14     ip-192-168-6-183.ap-southeast-1.compute.internal    <none>           <none>
+webapp                         1/1     Running   0          15h   192.168.46.12    ip-192-168-46-119.ap-southeast-1.compute.internal   <none>           <none>
+
+
+[root@ip-10-0-0-53 ~]# kubectl describe service/damon-service
+Name:                     damon-service
+Namespace:                default
+Labels:                   app=regapp
+Annotations:              <none>
+Selector:                 app=regapp
+Type:                     LoadBalancer
+IP Family Policy:         SingleStack
+IP Families:              IPv4
+IP:                       10.100.41.159
+IPs:                      10.100.41.159
+LoadBalancer Ingress:     a9d492f595295410aaf00ae6496badd2-548910081.ap-southeast-1.elb.amazonaws.com
+Port:                     <unset>  8080/TCP
+TargetPort:               8080/TCP
+NodePort:                 <unset>  31396/TCP
+Endpoints:                192.168.57.128:8080,192.168.7.14:8080
+Session Affinity:         None
+External Traffic Policy:  Cluster
+Events:                   <none>
+
+
+[root@ip-10-0-0-53 ~]# kubectl get nodes
+NAME                                                STATUS   ROLES    AGE   VERSION
+ip-192-168-46-119.ap-southeast-1.compute.internal   Ready    <none>   16h   v1.22.9-eks-810597c
+ip-192-168-6-183.ap-southeast-1.compute.internal    Ready    <none>   16h   v1.22.9-eks-810597c
+[root@ip-10-0-0-53 ~]# kubectl get pods
+NAME                           READY   STATUS    RESTARTS   AGE
+damon-regapp-b646fb86b-4rwtn   1/1     Running   0          17m
+damon-regapp-b646fb86b-f4ll7   1/1     Running   0          17m
+webapp                  	   1/1     Running   0          15h   
+
+  
+[root@ip-10-0-0-53 ~]# kubectl get all
+NAME                               READY   STATUS    RESTARTS   AGE
+pod/damon-regapp-b646fb86b-4rwtn   1/1     Running   0          18m
+pod/damon-regapp-b646fb86b-f4ll7   1/1     Running   0          18m
+pod/webapp                         1/1     Running   0          15h
+
+NAME                    TYPE           CLUSTER-IP      EXTERNAL-IP                                                                   PORT(S)          AGE
+service/damon-service   LoadBalancer   10.100.41.159   a9d492f595295410aaf00ae6496badd2-548910081.ap-southeast-1.elb.amazonaws.com   8080:31396/TCP   145m
+service/kubernetes      ClusterIP      10.100.0.1      <none>                                                                        443/TCP          16h
+
+NAME                           READY   UP-TO-DATE   AVAILABLE   AGE
+deployment.apps/damon-regapp   2/2     2            2           146m
+
+NAME                                      DESIRED   CURRENT   READY   AGE
+replicaset.apps/damon-regapp-57f78db9b    0         0         0       91m
+replicaset.apps/damon-regapp-5f6d88986c   0         0         0       146m
+replicaset.apps/damon-regapp-b646fb86b    2         2         2       18m
+[root@ip-10-0-0-53 ~]#
+
+
+
+
+
+
+*******CLEANUP********
+kubectl delete deploymentXX   |   servieXX
+delete the cluster: eksctl delete cluster damon --region ap-southeast-1
+
+
+
+
