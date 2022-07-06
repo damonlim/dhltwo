@@ -18,3 +18,14 @@ WHEN feature is completed  (OPTION 2)
 create a pull request from BitBucket
 reviewers approve the request
 admin merges the feature branch through BitBucket
+
+
+------------
+If you keep using your own feature/damon branch. Then follow the below after every PULL REQUEST merge is completed:
+1. In VSCode, branch back to main branch: $git checkout main
+2. PUll updated code to your local copy: $git pull
+3. Switch back to feature branch: $git checkout feature/damon
+4. Merge if there is anything new from main branch: $git merge main
+5. Push the merge files to server: $git push origin feature/damon
+
+git remote show origin: useful to check the overall status in your local
