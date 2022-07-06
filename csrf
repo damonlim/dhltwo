@@ -1,0 +1,18 @@
+CSRF in Express server and React Client implementation
+
+npm i csurf
+
+express server:
+const csrfProtection = csrf({
+  cookie: true
+});
+app.use(csrfProtection);
+app.get('/getCSRFToken', (req, res) => {
+  res.json({ CSRFToken: req.CSRFToken() });
+});
+
+react client:
+ const getCSRFToken = async () => {
+    const response = await axios.get('/getCSRFToken');
+    axios.defaults.headers.post['X-CSRF-Token'] = response.data.CSRFToken;
+ };
