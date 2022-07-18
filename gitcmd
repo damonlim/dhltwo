@@ -29,3 +29,10 @@ If you keep using your own feature/damon branch. Then follow the below after eve
 5. Push the merge files to server: $git push origin feature/damon
 
 git remote show origin: useful to check the overall status in your local
+
+
+------------
+Git checkout specific version
+
+git clone <repository>
+git reset --hard <COMMIT-SHA-ID>
