@@ -1,0 +1,5 @@
+
+
+Transfer files to aws ec2
+scp -i /path/my-key-pair.pem /path/SampleFile.txt ec2-user@c2-198-51-100-1.compute-1.amazonaws.com:~
+
